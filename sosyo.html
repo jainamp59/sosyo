@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pulse Drifter</title>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#1a1238;--bg2:#2b1b5c;--sun:#ffd166;--mint:#4de1c1;--coral:#ff5d73;--ink:#f4efff;--dim:#a99bd6;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:'Baloo 2',system-ui,sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+#wrap{position:relative;height:100%;background:radial-gradient(circle at 50% 40%,var(--bg2),var(--bg) 70%)}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+#hud{position:absolute;top:10px;left:0;right:0;display:flex;justify-content:space-between;padding:0 16px;pointer-events:none;font-weight:800}
+#hud small{display:block;color:var(--dim);font-weight:500;font-size:13px;line-height:1}
+#score{font-size:38px;line-height:1}
+#mid{text-align:center;font-size:22px;color:var(--sun);min-height:30px}
+#right{text-align:right;font-size:22px;letter-spacing:2px}
+.pips{display:inline-flex;gap:5px;vertical-align:middle}
+.pip{width:14px;height:14px;border-radius:50%;border:2px solid var(--mint);box-sizing:border-box}
+.pip.on{background:var(--mint);box-shadow:0 0 10px var(--mint)}
+#pulseBtn{position:absolute;right:18px;bottom:calc(18px + env(safe-area-inset-bottom,0px));width:84px;height:84px;border-radius:50%;border:3px solid var(--mint);background:rgba(77,225,193,.12);color:var(--mint);font:800 17px 'Baloo 2',sans-serif;display:none}
+@media (pointer:coarse){#pulseBtn{display:block}}
+#pulseBtn:active{background:rgba(77,225,193,.35)}
+.panel{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;background:rgba(26,18,56,.86);gap:10px}
+.panel.hide{display:none}
+h1{font-size:clamp(44px,11vw,84px);margin:0;line-height:.95;font-weight:800;color:var(--sun);text-shadow:0 4px 0 var(--coral)}
+p{margin:0;max-width:30em;color:var(--dim);font-size:18px;line-height:1.35}
+p b{color:var(--ink);font-weight:800}
+button.go{margin-top:12px;font:800 24px 'Baloo 2',sans-serif;padding:10px 38px;border-radius:40px;border:0;background:var(--sun);color:#2b1b5c;cursor:pointer;box-shadow:0 5px 0 #c9992e}
+button.go:active{transform:translateY(4px);box-shadow:0 1px 0 #c9992e}
+button.go:focus-visible{outline:3px solid var(--mint);outline-offset:3px}
+.big{font-size:56px;font-weight:800;color:var(--ink);line-height:1}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="hud">
+    <div><span id="score">0</span><small id="best">Best 0</small></div>
+    <div id="mid"></div>
+    <div id="right"><div id="lives">♥♥♥</div><div class="pips" id="pips"></div></div>
+  </div>
+  <button id="pulseBtn" aria-label="Pulse">PULSE</button>
+
+  <div class="panel" id="start">
+    <h1>Pulse<br>Drifter</h1>
+    <p>Steer the sun with your <b>mouse or finger</b>. Grab <b>mint gems</b> to build a combo. Dodge the <b>coral spikes</b>.</p>
+    <p>Every 3 gems charges a <b>Pulse</b> (click, tap the button, or press Space) that blasts nearby spikes for bonus points.</p>
+    <button class="go" id="play">Play</button>
+  </div>
+  <div class="panel hide" id="over">
+    <p>Game over</p>
+    <div class="big" id="final">0</div>
+    <p id="msg"></p>
+    <button class="go" id="again">Play again</button>
+  </div>
+</div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+let W,H,dpr;
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=cv.clientWidth;H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+let best=0;try{best=+localStorage.getItem('pd_best')||0}catch(e){}
+$('best').textContent='Best '+best;
+
+let S; // state
+const mouse={x:0,y:0};
+const R=(a,b)=>a+Math.random()*(b-a);
+
+function newGame(){
+  S={run:true,t:0,score:0,lives:3,charge:0,gemsGot:0,combo:0,comboT:0,inv:0,
+     p:{x:W/2,y:H/2,r:13},hz:[],gems:[],parts:[],pulses:[],spawn:1,flash:0,shake:0,msg:'',msgT:0};
+  mouse.x=W/2;mouse.y=H/2;
+  for(let i=0;i<3;i++)addGem();
+  hud();
+}
+function addGem(){S.gems.push({x:R(40,W-40),y:R(90,H-40),r:10,life:8,ph:R(0,6)})}
+function addHazard(){
+  const side=Math.floor(R(0,4)),m=30;let x,y;
+  if(side==0){x=R(0,W);y=-m}else if(side==1){x=W+m;y=R(0,H)}else if(side==2){x=R(0,W);y=H+m}else{x=-m;y=R(0,H)}
+  const tx=S.p.x+R(-W*.3,W*.3),ty=S.p.y+R(-H*.3,H*.3);
+  const a=Math.atan2(ty-y,tx-x),sp=Math.min(70+S.t*1.6,210)*R(.8,1.25);
+  S.hz.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,r:R(12,20),rot:0,spin:R(-3,3)});
+}
+function burst(x,y,col,n,sp){for(let i=0;i<n;i++){const a=R(0,6.28),s=R(.3,1)*sp;S.parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,l:R(.3,.7),c:col})}}
+function say(m){S.msg=m;S.msgT=1}
+function mult(){return 1+Math.min(S.combo,12)*.5}
+
+function pulse(){
+  if(!S||!S.run||S.charge<1)return;
+  S.charge--;S.pulses.push({x:S.p.x,y:S.p.y,r:0,hit:new Set()});S.shake=6;hud();
+}
+
+function hud(){
+  $('score').textContent=Math.floor(S.score);
+  $('lives').textContent='♥'.repeat(Math.max(S.lives,0));
+  $('pips').innerHTML=[0,1,2].map(i=>'<span class="pip'+(i<S.charge?' on':'')+'"></span>').join('');
+  $('mid').textContent=S.combo>1?'x'+mult().toFixed(1)+' combo':(S.msgT>0?S.msg:'');
+}
+
+function update(dt){
+  S.t+=dt;
+  const p=S.p;
+  p.x+=(mouse.x-p.x)*Math.min(1,dt*9);p.y+=(mouse.y-p.y)*Math.min(1,dt*9);
+  p.x=Math.max(p.r,Math.min(W-p.r,p.x));p.y=Math.max(p.r,Math.min(H-p.r,p.y));
+  S.inv=Math.max(0,S.inv-dt);S.shake=Math.max(0,S.shake-dt*30);S.msgT=Math.max(0,S.msgT-dt);
+  if(S.combo>0){S.comboT-=dt;if(S.comboT<=0){S.combo=0;hud()}}
+  S.spawn-=dt;
+  if(S.spawn<=0){addHazard();if(S.t>40&&Math.random()<.4)addHazard();S.spawn=Math.max(.25,1.1-S.t/70)}
+  // hazards
+  for(let i=S.hz.length-1;i>=0;i--){
+    const h=S.hz[i];h.x+=h.vx*dt;h.y+=h.vy*dt;h.rot+=h.spin*dt;
+    if(h.x<-80||h.x>W+80||h.y<-80||h.y>H+80){S.hz.splice(i,1);continue}
+    if(S.inv<=0&&Math.hypot(h.x-p.x,h.y-p.y)<h.r+p.r-3){
+      S.hz.splice(i,1);S.lives--;S.inv=1.6;S.combo=0;S.shake=14;
+      burst(p.x,p.y,'#ff5d73',22,260);hud();
+      if(S.lives<=0)return end();
+    }
+  }
+  // gems
+  for(let i=S.gems.length-1;i>=0;i--){
+    const g=S.gems[i];g.life-=dt;
+    if(g.life<=0){S.gems.splice(i,1);addGem();continue}
+    if(Math.hypot(g.x-p.x,g.y-p.y)<g.r+p.r+4){
+      S.gems.splice(i,1);S.combo++;S.comboT=2.6;S.score+=10*mult();S.gemsGot++;
+      if(S.gemsGot%3==0&&S.charge<3){S.charge++;say('Pulse ready!')}
+      burst(g.x,g.y,'#4de1c1',14,180);addGem();hud();
+    }
+  }
+  // pulses
+  for(let i=S.pulses.length-1;i>=0;i--){
+    const u=S.pulses[i];u.r+=520*dt;
+    for(let j=S.hz.length-1;j>=0;j--){
+      const h=S.hz[j];
+      if(Math.hypot(h.x-u.x,h.y-u.y)<u.r){S.score+=15*mult();burst(h.x,h.y,'#ffd166',16,220);S.hz.splice(j,1);hud()}
+    }
+    if(u.r>240)S.pulses.splice(i,1);
+  }
+  for(let i=S.parts.length-1;i>=0;i--){const q=S.parts[i];q.x+=q.vx*dt;q.y+=q.vy*dt;q.l-=dt;if(q.l<=0)S.parts.splice(i,1)}
+  S.score+=dt*2;
+  $('score').textContent=Math.floor(S.score);
+}
+
+function end(){
+  S.run=false;const sc=Math.floor(S.score);
+  const nb=sc>best;if(nb){best=sc;try{localStorage.setItem('pd_best',best)}catch(e){}}
+  $('best').textContent='Best '+best;
+  $('final').textContent=sc;
+  $('msg').textContent=nb?'New best! Can you push it further?':'Best is '+best+'. Chain gems faster for a bigger multiplier.';
+  $('over').classList.remove('hide');
+}
+
+function spike(x,y,r,rot,col){
+  ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.fillStyle=col;ctx.beginPath();
+  for(let i=0;i<16;i++){const a=i*Math.PI/8,rr=i%2?r*.6:r*1.35;ctx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr)}
+  ctx.closePath();ctx.fill();ctx.restore();
+}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  if(S.shake>0)ctx.translate(R(-S.shake,S.shake)/2,R(-S.shake,S.shake)/2);
+  // comboring timer
+  for(const g of S.gems){
+    const f=g.life<2?(Math.sin(S.t*20)>0?1:.3):1;
+    ctx.globalAlpha=f;ctx.shadowColor='#4de1c1';ctx.shadowBlur=16;ctx.fillStyle='#4de1c1';
+    ctx.save();ctx.translate(g.x,g.y);ctx.rotate(Math.PI/4+Math.sin(S.t*2+g.ph)*.2);
+    ctx.fillRect(-g.r*.8,-g.r*.8,g.r*1.6,g.r*1.6);ctx.restore();
+  }
+  ctx.shadowBlur=0;ctx.globalAlpha=1;
+  for(const h of S.hz)spike(h.x,h.y,h.r,h.rot,'#ff5d73');
+  for(const u of S.pulses){ctx.strokeStyle='rgba(255,209,102,'+Math.max(0,1-u.r/240)+')';ctx.lineWidth=6;ctx.beginPath();ctx.arc(u.x,u.y,u.r,0,6.283);ctx.stroke()}
+  for(const q of S.parts){ctx.globalAlpha=Math.min(1,q.l*2);ctx.fillStyle=q.c;ctx.fillRect(q.x-2,q.y-2,4,4)}
+  ctx.globalAlpha=1;
+  // player
+  const p=S.p;
+  if(!(S.inv>0&&Math.floor(S.t*14)%2)){
+    ctx.shadowColor='#ffd166';ctx.shadowBlur=26;ctx.fillStyle='#ffd166';
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,6.283);ctx.fill();ctx.shadowBlur=0;
+    if(S.charge>0){ctx.strokeStyle='#4de1c1';ctx.lineWidth=3;ctx.beginPath();ctx.arc(p.x,p.y,p.r+6+Math.sin(S.t*8)*2,0,6.283*S.charge/3);ctx.stroke()}
+  }
+  ctx.restore();
+  // combo bar
+  if(S.combo>0){ctx.fillStyle='rgba(255,209,102,.8)';ctx.fillRect(0,H-5,W*(S.comboT/2.6),5)}
+}
+
+let last=0;
+function loop(ts){
+  const dt=Math.min(.05,(ts-last)/1000||0);last=ts;
+  if(S){if(S.run)update(dt);draw()}
+  requestAnimationFrame(loop);
+}
+
+function start(){
+  $('start').classList.add('hide');$('over').classList.add('hide');newGame();
+}
+$('play').onclick=start;$('again').onclick=start;
+cv.addEventListener('pointermove',e=>{const r=cv.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top});
+cv.addEventListener('pointerdown',e=>{const r=cv.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top;if(e.pointerType==='mouse')pulse()});
+$('pulseBtn').addEventListener('pointerdown',e=>{e.stopPropagation();pulse()});
+addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();pulse()}
+  if(!S)return;
+  const k={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1],KeyA:[-1,0],KeyD:[1,0],KeyW:[0,-1],KeyS:[0,1]}[e.code];
+  if(k){mouse.x=S.p.x+k[0]*120;mouse.y=S.p.y+k[1]*120}
+});
+S={run:false,t:0,score:0,lives:3,charge:0,p:{x:W/2,y:H/2,r:13},hz:[],gems:[],parts:[],pulses:[],shake:0,inv:0,combo:0,comboT:0,msgT:0};
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
